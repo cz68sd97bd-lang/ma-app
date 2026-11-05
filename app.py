@@ -6,7 +6,9 @@ import ipywidgets as widgets
 from IPython.display import display, clear_output
 from datetime import datetime
 
-# 1. 도면 기준서 데이터베이스 (측정부위 제거, 약어 반영)
+# ==========================================================================
+# 1. 도면 기준서 데이터베이스 (기본 세팅 + 신규 등록용 통합)
+# ==========================================================================
 STANDARDS_DB = {
     "A타입 베어링 도면": [
         {"no": "1", "method": "V/C", "lsl": 10.0, "usl": 10.2},
@@ -16,10 +18,16 @@ STANDARDS_DB = {
     "B타입 샤프트 도면": [
         {"no": "1", "method": "Micrometer", "lsl": 14.95, "usl": 15.05},
         {"no": "2", "method": "V/C", "lsl": 4.98, "usl": 5.02},
+    ],
+    "C타입 실린더 도면": [
+        {"no": "1", "method": "마이크로미터", "lsl": 35.15, "usl": 35.25},
+        {"no": "2", "method": "버니어 캘리퍼스", "lsl": 8.02, "usl": 8.10}
     ]
 }
 
+# ==========================================================================
 # 2. 엑셀 생성 핵심 함수
+# ==========================================================================
 def generate_excel(meta_data, cvt_settings, standards_key):
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -87,8 +95,7 @@ def generate_excel(meta_data, cvt_settings, standards_key):
             cell.border = thin_border
             cell.alignment = align_center
 
-    # 상단표와 치수입력표 사이에 도면 사진용 20칸 공간 여유 확보
-    # 기존 7행 시작이었으나, 20칸을 더하여 메인 표는 27행부터 시작되도록 함
+    # 상단표와 치수입력표 사이에 도면 사진용 20칸 공간 여유 확보 (메인 표는 27행부터 시작)
     header_start_row = 27
 
     # 본문 헤더 영역 배치 (27행 ~ 28행)
@@ -132,8 +139,14 @@ def generate_excel(meta_data, cvt_settings, standards_key):
     for i, std in enumerate(standards):
         r_idx = header_start_row + 2 + i
 
-        # [no, method, lsl, usl] 필드 매핑
+        # [no, method, lsl, usl] 필드 매핑 - 신규 브래킷 누락 오류 수정
         base_values = [std["no"], std["method"], std["lsl"], std["usl"]]
+        if "part" in std:
+            # 만약 'part' (측정부위) 항목이 등록되어 있다면 비고에 자동 주석 처리
+            f_remark = std["part"]
+        else:
+            f_remark = ""
+
         for col_idx, val in enumerate(base_values, 1):
             cell = ws.cell(row=r_idx, column=col_idx, value=val)
             cell.font = font_data
@@ -151,7 +164,6 @@ def generate_excel(meta_data, cvt_settings, standards_key):
         f_max = f"=MAX({start_col_letter}{r_idx}:{end_col_letter}{r_idx})"
         f_avg = f"=AVERAGE({start_col_letter}{r_idx}:{end_col_letter}{r_idx})"
         f_result = f'=IF(COUNT({start_col_letter}{r_idx}:{end_col_letter}{r_idx})=0, "", IF(AND({get_column_letter(end_data_col+1)}{r_idx}>=C{r_idx}, {get_column_letter(end_data_col+2)}{r_idx}<=D{r_idx}), "OK", "NG"))'
-        f_remark = ""
 
         formulas = [f_min, f_max, f_avg, f_result, f_remark]
         for idx, formula in enumerate(formulas, end_data_col + 1):
@@ -163,10 +175,9 @@ def generate_excel(meta_data, cvt_settings, standards_key):
 
         ws.row_dimensions[r_idx].height = 25
 
-    # 우측 측정 방식 코드 표 작성 (통계 테이블 우측에 2칸 띄우고 27행부터 배치)
+    # 우측 측정 방식 코드 표 작성
     code_start_col = total_cols + 3
 
-    # 코드표 헤더
     ws.merge_cells(start_row=header_start_row, start_column=code_start_col, end_row=header_start_row, end_column=code_start_col+1)
     lbl_cell = ws.cell(row=header_start_row, column=code_start_col, value="측정 방식 코드 표")
     lbl_cell.font = font_header
@@ -180,9 +191,8 @@ def generate_excel(meta_data, cvt_settings, standards_key):
         h_cell.alignment = align_center
         h_cell.fill = sub_header_fill
         h_cell.border = thin_border
-    ws.cell(row=header_start_row, column=code_start_col+1).border = thin_border # 병합영역 보더 처리
+    ws.cell(row=header_start_row, column=code_start_col+1).border = thin_border
 
-    # 코드표 내용 데이터
     measurement_methods = [
         ("V/C", "버니어 캘리퍼스"),
         ("CMM", "3차원 측정기"),
@@ -210,7 +220,6 @@ def generate_excel(meta_data, cvt_settings, standards_key):
         else:
             ws.column_dimensions[col_letter].width = 14
 
-    # 코드표 전용 열 너비 지정
     ws.column_dimensions[get_column_letter(code_start_col)].width = 15
     ws.column_dimensions[get_column_letter(code_start_col+1)].width = 20
 
@@ -218,7 +227,9 @@ def generate_excel(meta_data, cvt_settings, standards_key):
     wb.save(filename)
     return filename
 
-# UI 컴포넌트 생성
+# ==========================================================================
+# 3. UI 제어 컴포넌트 구성 및 렌더링
+# ==========================================================================
 output_area = widgets.Output()
 
 select_standard = widgets.Dropdown(options=list(STANDARDS_DB.keys()), description="기준서 선택:")
@@ -270,7 +281,7 @@ btn_generate.on_click(on_btn_click)
 
 display(
     widgets.VBox([
-        widgets.HTML("<h3>📝 엑셀 성적서 자동화 제어반</h3>"),
+        widgets.HTML("<h3>📝 엑셀 성적서 자동화 제어반 (통합본)</h3>"),
         select_standard,
         widgets.HBox([txt_car_model, txt_part_name]),
         widgets.HBox([txt_part_number, txt_lot_no]),
