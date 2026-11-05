@@ -2,12 +2,12 @@ import os
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-import ipywidgets as widgets
-from IPython.display import display, clear_output
+import streamlit as st
+import io
 from datetime import datetime
 
 # ==========================================================================
-# 1. 도면 기준서 데이터베이스 (기본 세팅 + 신규 등록용 통합)
+# 1. 도면 기준서 데이터베이스
 # ==========================================================================
 STANDARDS_DB = {
     "A타입 베어링 도면": [
@@ -40,7 +40,7 @@ def generate_excel(meta_data, cvt_settings, standards_key):
     sub_header_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
     summary_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
     meta_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
-    code_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid") # 우측 코드표 초록색 강조
+    code_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid") 
 
     font_title = Font(name="맑은 고딕", size=16, bold=True)
     font_header = Font(name="맑은 고딕", size=10, bold=True)
@@ -50,7 +50,6 @@ def generate_excel(meta_data, cvt_settings, standards_key):
 
     standards = STANDARDS_DB.get(standards_key, [])
 
-    # 열 수 계산 ('측정부위' 헤더 제외)
     base_headers = ["검사번호", "측정방법", "하한치\n(LSL)", "상한치\n(USL)"]
     start_data_col = len(base_headers) + 1
 
@@ -59,22 +58,19 @@ def generate_excel(meta_data, cvt_settings, standards_key):
         current_col += count
     end_data_col = current_col - 1
 
-    # 통계 요약 헤더 정의 (사용자 요청: 종합판정 옆에 비고란 추가)
     summary_headers = ["최소값\n(MIN)", "최대값\n(MAX)", "평균값\n(AVG)", "종합판정\n(RESULT)", "비고\n(REMARKS)"]
     total_cols = end_data_col + len(summary_headers)
 
-    # 타이틀 영역 (사용자 요청: 상단 고정 타이틀 적용)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
     ws["A1"] = "시사출 치수 측정 결과"
     ws["A1"].font = font_title
     ws["A1"].alignment = align_center
     ws.row_dimensions[1].height = 40
 
-    # 메타 정보 영역 작성 (3행 ~ 4행, 기준서 제외하고 압축 배치)
     meta_labels = [
         ("차종", meta_data["car_model"], "품명", meta_data["part_name"]),
         ("품번", meta_data["part_number"], "LOT NO", meta_data["lot_no"]),
-        ("측정일자", meta_data["date"], "", "")  # 기준서 항목 제거
+        ("측정일자", meta_data["date"], "", "")  
     ]
 
     for i, (l1, v1, l2, v2) in enumerate(meta_labels):
@@ -82,7 +78,6 @@ def generate_excel(meta_data, cvt_settings, standards_key):
         ws.cell(row=r, column=1, value=l1).fill = meta_fill
         ws.cell(row=r, column=2, value=v1)
 
-        # 세 번째 줄에서 우측 빈칸인 경우는 제외
         if l2:
             ws.cell(row=r, column=3, value=l2).fill = meta_fill
             ws.cell(row=r, column=4, value=v2)
@@ -95,10 +90,8 @@ def generate_excel(meta_data, cvt_settings, standards_key):
             cell.border = thin_border
             cell.alignment = align_center
 
-    # 상단표와 치수입력표 사이에 도면 사진용 20칸 공간 여유 확보 (메인 표는 27행부터 시작)
     header_start_row = 27
 
-    # 본문 헤더 영역 배치 (27행 ~ 28행)
     for col_idx, h_text in enumerate(base_headers, 1):
         ws.merge_cells(start_row=header_start_row, start_column=col_idx, end_row=header_start_row+1, end_column=col_idx)
         cell = ws.cell(row=header_start_row, column=col_idx, value=h_text)
@@ -132,20 +125,14 @@ def generate_excel(meta_data, cvt_settings, standards_key):
         for c in range(1, total_cols + 1):
             ws.cell(row=r, column=c).border = thin_border
 
-    # 데이터 행 작성
     start_col_letter = get_column_letter(start_data_col)
     end_col_letter = get_column_letter(end_data_col)
 
     for i, std in enumerate(standards):
         r_idx = header_start_row + 2 + i
 
-        # [no, method, lsl, usl] 필드 매핑 - 신규 브래킷 누락 오류 수정
         base_values = [std["no"], std["method"], std["lsl"], std["usl"]]
-        if "part" in std:
-            # 만약 'part' (측정부위) 항목이 등록되어 있다면 비고에 자동 주석 처리
-            f_remark = std["part"]
-        else:
-            f_remark = ""
+        f_remark = std.get("part", "")
 
         for col_idx, val in enumerate(base_values, 1):
             cell = ws.cell(row=r_idx, column=col_idx, value=val)
@@ -159,7 +146,6 @@ def generate_excel(meta_data, cvt_settings, standards_key):
             cell.alignment = align_center
             cell.font = font_data
 
-        # 수식 계산 컬럼들의 주소 매핑 (하한치: C열, 상한치: D열)
         f_min = f"=MIN({start_col_letter}{r_idx}:{end_col_letter}{r_idx})"
         f_max = f"=MAX({start_col_letter}{r_idx}:{end_col_letter}{r_idx})"
         f_avg = f"=AVERAGE({start_col_letter}{r_idx}:{end_col_letter}{r_idx})"
@@ -175,9 +161,7 @@ def generate_excel(meta_data, cvt_settings, standards_key):
 
         ws.row_dimensions[r_idx].height = 25
 
-    # 우측 측정 방식 코드 표 작성
     code_start_col = total_cols + 3
-
     ws.merge_cells(start_row=header_start_row, start_column=code_start_col, end_row=header_start_row, end_column=code_start_col+1)
     lbl_cell = ws.cell(row=header_start_row, column=code_start_col, value="측정 방식 코드 표")
     lbl_cell.font = font_header
@@ -189,107 +173,76 @@ def generate_excel(meta_data, cvt_settings, standards_key):
     for h_cell in [col_code, col_desc]:
         h_cell.font = font_bold
         h_cell.alignment = align_center
-        h_cell.fill = sub_header_fill
         h_cell.border = thin_border
-    ws.cell(row=header_start_row, column=code_start_col+1).border = thin_border
 
-    measurement_methods = [
-        ("V/C", "버니어 캘리퍼스"),
-        ("CMM", "3차원 측정기"),
-        ("H/G", "하이트 게이지"),
-        ("Micrometer", "마이크로미터"),
-        ("PJ", "투영기")
-    ]
-
-    for idx, (code, desc) in enumerate(measurement_methods):
-        curr_row = header_start_row + 2 + idx
-        c_cell = ws.cell(row=curr_row, column=code_start_col, value=code)
-        d_cell = ws.cell(row=curr_row, column=code_start_col+1, value=desc)
-        for cell in [c_cell, d_cell]:
-            cell.font = font_data
-            cell.alignment = align_center
-            cell.border = thin_border
-
-    # 너비 맞춤 조절
-    for c in range(1, total_cols + 1):
-        col_letter = get_column_letter(c)
-        if c <= len(base_headers):
-            ws.column_dimensions[col_letter].width = 15 if c != 2 else 20
-        elif c <= end_data_col:
-            ws.column_dimensions[col_letter].width = 9
-        else:
-            ws.column_dimensions[col_letter].width = 14
-
-    ws.column_dimensions[get_column_letter(code_start_col)].width = 15
-    ws.column_dimensions[get_column_letter(code_start_col+1)].width = 20
-
-    filename = f"성적서_{meta_data['part_name']}_{meta_data['lot_no']}.xlsx"
-    wb.save(filename)
-    return filename
+    # 메모리 버퍼로 엑셀 반환
+    excel_data = io.BytesIO()
+    wb.save(excel_data)
+    excel_data.seek(0)
+    return excel_data
 
 # ==========================================================================
-# 3. UI 제어 컴포넌트 구성 및 렌더링
+# 3. Streamlit 웹 인터페이스 화면 구성
 # ==========================================================================
-output_area = widgets.Output()
+st.set_page_config(page_title="치수성적서 생성기", layout="centered")
+st.title("📊 치수 측정 성적서 자동 생성기")
+st.write("정보를 입력하고 하단의 버튼을 누르면 성적서 양식이 자동 생성됩니다.")
 
-select_standard = widgets.Dropdown(options=list(STANDARDS_DB.keys()), description="기준서 선택:")
-txt_car_model = widgets.Text(placeholder="예: CVT-Project", description="차종:")
-txt_part_name = widgets.Text(placeholder="예: 샤프트 쉴드", description="품명:")
-txt_part_number = widgets.Text(placeholder="예: P12345-ABC", description="품번:")
-txt_lot_no = widgets.Text(placeholder="예: LOT-2023A", description="LOT NO:")
-txt_date = widgets.DatePicker(value=datetime.now(), description="측정일자:")
+st.markdown("---")
+st.subheader("1. 기본 정보 입력")
 
-cvt_count_slider = widgets.IntSlider(value=2, min=1, max=5, description="CVT 개수:")
-cvt_samples_container = widgets.VBox()
+col1, col2 = st.columns(2)
+with col1:
+    car_model = st.text_input("차종", value="A-CAR")
+    part_number = st.text_input("품번", value="P12345-ABC")
+with col2:
+    part_name = st.text_input("품명", value="BEARING ASSEMBLY")
+    lot_no = st.text_input("LOT NO", value="LOT-" + datetime.today().strftime('%Y%m%d'))
 
-def update_cvt_inputs(*args):
-    items = []
-    for idx in range(1, cvt_count_slider.value + 1):
-        items.append(widgets.IntText(value=3, min=1, max=20, description=f"CVT-{idx} 샘플수:"))
-    cvt_samples_container.children = items
+check_date = st.date_input("측정일자", datetime.today())
 
-cvt_count_slider.observe(update_cvt_inputs, 'value')
-update_cvt_inputs()
+st.markdown("---")
+st.subheader("2. 도면 선택 및 조건 세팅")
 
-btn_generate = widgets.Button(description="엑셀 성적서 자동 생성", button_style="success", icon="check")
+standards_key = st.selectbox("기준 도면 선택", list(STANDARDS_DB.keys()))
 
-def on_btn_click(b):
-    with output_area:
-        clear_output()
+col3, col4 = st.columns(2)
+with col3:
+    cvt1_sample = st.number_input("CVT-1 샘플 수", min_value=0, max_value=30, value=3)
+with col4:
+    cvt2_sample = st.number_input("CVT-2 샘플 수", min_value=0, max_value=30, value=3)
 
-        cvt_settings = {}
-        for widget in cvt_samples_container.children:
-            cvt_name = widget.description.replace(" 샘플수:", "")
-            cvt_settings[cvt_name] = widget.value
+# 매핑 데이터 가공
+meta_data = {
+    "car_model": car_model,
+    "part_name": part_name,
+    "part_number": part_number,
+    "lot_no": lot_no,
+    "date": check_date.strftime('%Y-%m-%d')
+}
 
-        meta_data = {
-            'car_model': txt_car_model.value or "N/A",
-            'part_name': txt_part_name.value or "N/A",
-            'part_number': txt_part_number.value or "N/A",
-            'lot_no': txt_lot_no.value or "N/A",
-            'date': txt_date.value.strftime("%Y-%m-%d") if txt_date.value else "N/A"
-        }
+cvt_settings = {}
+if cvt1_sample > 0:
+    cvt_settings["CVT-1"] = cvt1_sample
+if cvt2_sample > 0:
+    cvt_settings["CVT-2"] = cvt2_sample
 
-        try:
-            filename = generate_excel(meta_data, cvt_settings, select_standard.value)
-            print(f"🎉 성공적으로 생성되었습니다! 파일명: {filename}")
-            print("\n좌측 파일 탭을 새로고침하여 다운로드 받으세요.")
-        except Exception as e:
-            print(f"❌ 오류 발생: {e}")
+st.markdown("---")
 
-btn_generate.on_click(on_btn_click)
-
-display(
-    widgets.VBox([
-        widgets.HTML("<h3>📝 엑셀 성적서 자동화 제어반 (통합본)</h3>"),
-        select_standard,
-        widgets.HBox([txt_car_model, txt_part_name]),
-        widgets.HBox([txt_part_number, txt_lot_no]),
-        txt_date,
-        cvt_count_slider,
-        cvt_samples_container,
-        widgets.Label(""),
-        btn_generate,
-        output_area
-    ])
-)
+# 엑셀 파일 생성 및 즉시 다운로드 버튼 배치
+if cvt1_sample == 0 and cvt2_sample == 0:
+    st.warning("CVT 샘플 수를 최소 1개 이상 입력해 주세요.")
+else:
+    try:
+        processed_excel = generate_excel(meta_data, cvt_settings, standards_key)
+        
+        st.download_button(
+            label="🟢 치수측정성적서 엑셀 다운로드",
+            data=processed_excel,
+            file_name=f"치수측정성적서_{part_number}_{datetime.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+        st.success("양식이 준비되었습니다! 위의 초록색 버튼을 눌러 엑셀 파일을 다운로드하세요.")
+    except Exception as e:
+        st.error(f"엑셀 생성 중 에러가 발생했습니다: {e}")
